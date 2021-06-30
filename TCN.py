@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.applications import InceptionV3
 from tensorflow.keras.applications.inception_v3 import preprocess_input
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense,Conv2D,Flatten
+from tensorflow.keras.layers import Input, Dense,Conv2D,Flatten,BatchNormalization
 import matplotlib.pyplot as plt
 
 alpha=10.0
@@ -65,13 +65,17 @@ class TCNModel(tf.keras.Model):
     super(TCNModel,self).__init__()
 
     self.layer_1 = Conv2D(100,kernel_size=3,strides=1,activation='relu')
-    self.layer_2 = Conv2D(20,kernel_size=3,strides=1,activation='relu')
-    self.layer_3 = spatial_softmax(temperature=None, normalise=True)
-    self.layer_4 = Flatten()
-    self.layer_5 = Dense(32, activation='relu')
+    self.layer_2 = BatchNormalization()
+    self.layer_3 = Conv2D(20,kernel_size=3,strides=1,activation='relu')
+    self.layer_4  = BatchNormalization()
+    self.layer_5 = spatial_softmax(temperature=None, normalise=True)
+    self.layer_6 = Flatten()
+    self.layer_7 = Dense(32, activation='relu')
 
   def call(self,inputs):
-    x =  self.layer_5(self.layer_4(self.layer_3(self.layer_2(self.layer_1(inputs)))))
+    x =  self.layer_3(self.layer_2(self.layer_1(inputs)))
+    x  = self.layer_6(self.layer_5(self.layer_4(x)))
+    x  = self.layer_7(x)
     x = normalize(x) * alpha
     return x
 
