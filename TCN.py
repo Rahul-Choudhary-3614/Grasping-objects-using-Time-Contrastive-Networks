@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.applications import InceptionV3
 from tensorflow.keras.applications.inception_v3 import preprocess_input
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.layers import Input, Dense,Conv2D,Flatten
 import matplotlib.pyplot as plt
 
 alpha=10.0
@@ -15,6 +15,39 @@ inception=InceptionV3(include_top=False,pooling="avg")
 learning_rate=3e-4
 margin=2.0
 
+class CoordinateUtils(object):
+  @staticmethod
+  def get_image_coordinates(h, w, normalise):
+    x_range = tf.range(w, dtype=tf.float32)
+    y_range = tf.range(h, dtype=tf.float32)
+    if normalise:
+      x_range = (x_range / (w - 1)) * 2 - 1
+      y_range = (y_range / (h - 1)) * 2 - 1
+    image_x = tf.repeat(tf.expand_dims(x_range,0),h, 0)
+    image_y = tf.transpose(tf.repeat(tf.expand_dims(y_range,0),w, 0))
+    return image_x, image_y
+
+class spatial_softmax(tf.keras.Model):
+  def __init__(self, temperature=None, normalise=True):
+    super(spatial_softmax,self).__init__()
+    self.temperature = tf.ones(1) if temperature is None else tf.tensor([temperature])
+    self.normalise = normalise
+
+  def call(self,inputs):
+    N,H,W,C = inputs.shape
+    features = tf.reshape(tf.transpose(inputs, [0, 3, 1, 2]), [N * C, H * W])
+    softmax = tf.nn.softmax(features)
+    softmax = tf.reshape(softmax, [N, C, H, W])
+    softmax = tf.expand_dims(softmax, -1)
+    # Convert image coords to shape [H, W, 1, 2]
+    image_x, image_y = CoordinateUtils.get_image_coordinates(H, W, normalise=self.normalise)
+    image_coords = tf.concat([tf.expand_dims(image_x,-1), tf.expand_dims(image_y,-1)],-1)
+    
+    # Multiply (with broadcasting) and reduce over image dimensions to get the result
+    # of shape [N, C, 2]
+    spatial_soft_argmax = tf.reduce_sum(softmax * image_coords,[2, 3])
+    return spatial_soft_argmax
+ 
 def normalize(output_embedding):
   buffer = tf.math.pow(output_embedding, 2)
   normp = tf.math.reduce_sum(buffer, 1,keepdims=True) + 1e-10
@@ -27,13 +60,20 @@ def get_embeddings(input_frame):
   output_embedding=inception.predict(input_frame)
   return output_embedding
 
-def TCNModel():
-  inputs=Input(shape=(2048,))
-  layer_1=Dense(2048, activation='relu')(inputs)
-  layer_2=Dense(2048, activation='relu')(layer_1)
-  outputs=normalize(layer_2) * alpha
-  model = Model(inputs=inputs, outputs=outputs)
-  return model
+class TCNModel(tf.keras.Model):
+  def __init__(self,temperature=None, normalise=True):
+    super(TCNModel,self).__init__()
+
+    self.layer_1 = Conv2D(100,kernel_size=3,strides=1,activation='relu')
+    self.layer_2 = Conv2D(20,kernel_size=3,strides=1,activation='relu')
+    self.layer_3 = spatial_softmax(temperature=None, normalise=True)
+    self.layer_4 = Flatten()
+    self.layer_5 = Dense(32, activation='relu')
+
+  def call(self,inputs):
+    x =  self.layer_5(self.layer_4(self.layer_3(self.layer_2(self.layer_1(inputs)))))
+    x = normalize(x) * alpha
+    return x
 
 def ls(path):
     # returns list of files in directory without hidden ones.
